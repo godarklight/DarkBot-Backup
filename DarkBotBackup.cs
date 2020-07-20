@@ -15,15 +15,16 @@ namespace DarkBotBackup
         private DiscordSocketClient _client;
         //Channel ID, MessageID
         private ConcurrentDictionary<ulong, ulong> channelRead = new ConcurrentDictionary<ulong, ulong>();
+        private ConcurrentDictionary<ulong, string> channelNames = new ConcurrentDictionary<ulong, string>();
         private ConcurrentQueue<AttachmentDownload> attachmentDownloads = new ConcurrentQueue<AttachmentDownload>();
-        string savePath = Path.Combine(Environment.CurrentDirectory, "Backup", "ChannelRead.txt");
+        string channelReadPath = Path.Combine(Environment.CurrentDirectory, "Backup", "ChannelRead.txt");
+        string channelNamesPath = Path.Combine(Environment.CurrentDirectory, "Backup", "ChannelNames.txt");
 
         public Task Initialize(IServiceProvider services)
         {
             _client = (DiscordSocketClient)services.GetService(typeof(DiscordSocketClient));
             _client.Ready += ReadyAsync;
             _client.MessageReceived += MessageReceivedAsync;
-            _client.MessageUpdated += MessageUpdatedAsync;
             LoadChannelRead();
             return Task.CompletedTask;
         }
@@ -37,6 +38,7 @@ namespace DarkBotBackup
                     var textChannel = channel as SocketTextChannel;
                     if (textChannel != null)
                     {
+                        SetChannelName(textChannel.Id, textChannel.Name);
                         await BackupChannel(textChannel);
                     }
                 }
@@ -78,11 +80,20 @@ namespace DarkBotBackup
                                     case "image/tiff":
                                         fileName += ".tiff";
                                         break;
+                                    case "image/webp":
+                                        fileName += ".webp";
+                                        break;
                                     case "video/mp4":
                                         fileName += ".mp4";
                                         break;
                                     case "video/ogg":
                                         fileName += ".ogg";
+                                        break;
+                                    case "video/webm":
+                                        fileName += ".webm";
+                                        break;
+                                    case "text/plain":
+                                        fileName += ".txt";
                                         break;
                                     default:
                                         Console.WriteLine("Unknown content type: " + contentType);
@@ -124,11 +135,7 @@ namespace DarkBotBackup
                             fromMessage = message.Id;
                         }
                         newMessage = true;
-                        foreach (IAttachment attachment in message.Attachments)
-                        {
-                            Console.WriteLine($"Queued download for message: {message.Id}");
-                            attachmentDownloads.Enqueue(new AttachmentDownload(channel.Guild.Id, channel.Id, message.Id, attachment.Id, attachment.Url));
-                        }
+                        BackupMessage(channel, message);
                     }
                 }
                 if (!newMessage)
@@ -145,6 +152,15 @@ namespace DarkBotBackup
             Console.WriteLine($"Done backing up {channel.Name} on server {channel.Guild.Name}");
         }
 
+        private void BackupMessage(SocketTextChannel channel, IMessage message)
+        {
+            foreach (IAttachment attachment in message.Attachments)
+            {
+                Console.WriteLine($"Queued download for message: {message.Id}");
+                attachmentDownloads.Enqueue(new AttachmentDownload(channel.Guild.Id, channel.Id, message.Id, attachment.Id, attachment.Url));
+            }
+        }
+
 
         private Task ReadyAsync()
         {
@@ -156,11 +172,14 @@ namespace DarkBotBackup
 
         private Task MessageReceivedAsync(SocketMessage message)
         {
-            return Task.CompletedTask;
-        }
+            SocketTextChannel textChannel = message.Channel as SocketTextChannel;
+            if (textChannel != null)
+            {
+                SetChannelName(textChannel.Id, textChannel.Name);
+                BackupMessage(textChannel, message);
+                channelRead[textChannel.Id] = message.Id;
+            }
 
-        private Task MessageUpdatedAsync(Cacheable<IMessage, ulong> cacheable, SocketMessage message, ISocketMessageChannel channel)
-        {
             return Task.CompletedTask;
         }
 
@@ -181,10 +200,10 @@ namespace DarkBotBackup
 
         private void LoadChannelRead()
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(savePath));
-            if (File.Exists(savePath))
+            Directory.CreateDirectory(Path.GetDirectoryName(channelReadPath));
+            if (File.Exists(channelReadPath))
             {
-                using (StreamReader sr = new StreamReader(savePath))
+                using (StreamReader sr = new StreamReader(channelReadPath))
                 {
                     channelRead.Clear();
                     string currentLine = null;
@@ -209,18 +228,75 @@ namespace DarkBotBackup
 
         private void SaveChannelRead()
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(savePath));
-            if (File.Exists(savePath))
+            Directory.CreateDirectory(Path.GetDirectoryName(channelReadPath));
+            if (File.Exists(channelReadPath))
             {
-                File.Delete(savePath);
+                File.Delete(channelReadPath);
             }
-            using (StreamWriter sw = new StreamWriter(savePath))
+            using (StreamWriter sw = new StreamWriter(channelReadPath))
             {
                 foreach (KeyValuePair<ulong, ulong> kvp in channelRead)
                 {
                     sw.WriteLine($"{kvp.Key}={kvp.Value}");
                 }
             }
+        }
+
+        private void LoadChannelNames()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(channelNamesPath));
+            if (File.Exists(channelNamesPath))
+            {
+                using (StreamReader sr = new StreamReader(channelNamesPath))
+                {
+                    channelRead.Clear();
+                    string currentLine = null;
+                    while ((currentLine = sr.ReadLine()) != null)
+                    {
+                        currentLine = currentLine.Trim();
+                        string lhs = currentLine.Substring(0, currentLine.IndexOf("="));
+                        string rhs = currentLine.Substring(currentLine.IndexOf("=") + 1);
+                        if (ulong.TryParse(lhs, out ulong channelID))
+                        {
+                            channelNames[channelID] = rhs;
+                        }
+                    }
+                }
+                Console.WriteLine("Loaded channel names");
+            }
+            else
+            {
+                Console.WriteLine("First run - no channel names to load");
+            }
+        }
+
+        private void SaveChannelNames()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(channelNamesPath));
+            if (File.Exists(channelNamesPath))
+            {
+                File.Delete(channelNamesPath);
+            }
+            using (StreamWriter sw = new StreamWriter(channelNamesPath))
+            {
+                foreach (KeyValuePair<ulong, string> kvp in channelNames)
+                {
+                    sw.WriteLine($"{kvp.Key}={kvp.Value}");
+                }
+            }
+        }
+
+        private void SetChannelName(ulong channelID, string channelName)
+        {
+            if (channelNames.TryGetValue(channelID, out string oldname))
+            {
+                if (oldname == channelName)
+                {
+                    return;
+                }
+            }
+            channelNames[channelID] = channelName;
+            SaveChannelNames();
         }
     }
 }
