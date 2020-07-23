@@ -19,6 +19,7 @@ namespace DarkBotBackup
         private ConcurrentQueue<AttachmentDownload> attachmentDownloads = new ConcurrentQueue<AttachmentDownload>();
         string channelReadPath = Path.Combine(Environment.CurrentDirectory, "Backup", "ChannelRead.txt");
         string channelNamesPath = Path.Combine(Environment.CurrentDirectory, "Backup", "ChannelNames.txt");
+        public event Action<string> PictureEvent;
 
         public Task Initialize(IServiceProvider services)
         {
@@ -104,6 +105,10 @@ namespace DarkBotBackup
                                 {
                                     await fileDownload.Content.CopyToAsync(fs);
                                     Console.WriteLine($"Downloaded {ad.url} for message {ad.messageID}");
+                                    if (PictureEvent != null)
+                                    {
+                                        PictureEvent(fileName);
+                                    }
                                 }
                             }
                         }
