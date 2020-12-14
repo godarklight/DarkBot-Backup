@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DarkBot\DarkBot.csproj" />
+    <ProjectReference Include="..\DarkBot-Whitelist\DarkBot-Whitelist.csproj" />
   </ItemGroup>
 
   <ItemGroup>
