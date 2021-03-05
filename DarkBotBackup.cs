@@ -168,17 +168,15 @@ namespace DarkBotBackup
             }
             Log(LogSeverity.Info, $"Backing up {channel.Name} on server {channel.Guild.Name}");
             ulong fromMessage = GetChannelRead(channel.Id);
-            while (true)
+            bool newMessage = true;
+            while (newMessage)
             {
-                IAsyncEnumerable<IReadOnlyCollection<IMessage>> asyncMessages = null;
-                bool newMessage = false;
-                asyncMessages = channel.GetMessagesAsync(fromMessage, Direction.After);
-                await foreach (IReadOnlyCollection<IMessage> messages in asyncMessages)
+                newMessage = false;
+                await foreach (IReadOnlyCollection<IMessage> messages in channel.GetMessagesAsync(fromMessage, Direction.After))
                 {
                     foreach (IMessage message in messages)
                     {
-                        //Discord gives us the list in reverse order so we want to take just the first one as our "read" point
-                        if (newMessage == false)
+                        if (message.Id > fromMessage)
                         {
                             fromMessage = message.Id;
                         }
@@ -186,13 +184,12 @@ namespace DarkBotBackup
                         BackupMessage(channel, message, whitelistMatch);
                     }
                 }
-
-                if (!newMessage)
+                if (newMessage)
                 {
-                    break;
+                    Log(LogSeverity.Info, $"{channel.Name} is now on position {fromMessage}");
+                    SetChannelRead(channel.Id, fromMessage);
+                    await Task.Delay(1000);
                 }
-                SetChannelRead(channel.Id, fromMessage);
-                await Task.Delay(1000);
                 while (attachmentDownloads.Count > 0)
                 {
                     await Task.Delay(1000);
