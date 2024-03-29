@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using System.Linq;
 using System.Threading.Tasks;
 using DarkBot;
 using DarkBot.Whitelist;
@@ -32,11 +33,116 @@ namespace DarkBotBackup
             _client = services.GetService(typeof(DiscordSocketClient)) as DiscordSocketClient;
             _client.Ready += ReadyAsync;
             _client.MessageReceived += MessageReceivedAsync;
+            _client.SlashCommandExecuted += HandleCommand;
             _whitelist = services.GetService(typeof(Whitelist)) as Whitelist;
             LoadChannelRead();
             LoadChannelNames();
             LoadWhitelist();
             return Task.CompletedTask;
+        }
+
+        private async Task SetupCommands()
+        {
+            bool addbackupOK = false;
+            bool removebackupOK = false;
+            bool listbackupOK = false;
+            foreach (SocketApplicationCommand sac in await _client.GetGlobalApplicationCommandsAsync())
+            {
+                //For development, delete all old commands
+                //await sac.DeleteAsync();
+                if (sac.Name == "addbackup")
+                {
+                    addbackupOK = true;
+                }
+                if (sac.Name == "removebackup")
+                {
+                    removebackupOK = true;
+                }
+                if (sac.Name == "listbackup")
+                {
+                    listbackupOK = true;
+                }
+            }
+            if (!addbackupOK)
+            {
+                SlashCommandBuilder scb = new SlashCommandBuilder();
+                scb.WithName("addbackup");
+                scb.WithDescription("Add a whitelist object to the backups");
+                scb.AddOption("value", ApplicationCommandOptionType.String, "ID of the whitelist object", isRequired: true);
+                await _client.CreateGlobalApplicationCommandAsync(scb.Build());
+            }
+            if (!removebackupOK)
+            {
+                SlashCommandBuilder scb = new SlashCommandBuilder();
+                scb.WithName("removebackup");
+                scb.WithDescription("Remove a whitelist object to the backups");
+                scb.AddOption("value", ApplicationCommandOptionType.String, "ID of the whitelist object", isRequired: true);
+                await _client.CreateGlobalApplicationCommandAsync(scb.Build());
+            }
+            if (!listbackupOK)
+            {
+                SlashCommandBuilder scb = new SlashCommandBuilder();
+                scb.WithName("listbackup");
+                scb.WithDescription("List currently backed up objects");
+                await _client.CreateGlobalApplicationCommandAsync(scb.Build());
+            }
+        }
+
+        private async Task HandleCommand(SocketSlashCommand command)
+        {
+            if (command.CommandName != "listbackup" && command.CommandName != "addbackup" && command.CommandName != "removebackup")
+            {
+                return;
+            }
+            SocketGuildChannel sgc = command.Channel as SocketGuildChannel;
+            if (sgc == null)
+            {
+                await command.RespondAsync("This command can only be used from within a guild");
+                return;
+            }
+            SocketGuildUser sgu = sgc.GetUser(command.User.Id);
+            if (sgu == null)
+            {
+                await command.RespondAsync("This command can only be used from within a guild");
+                return;
+            }
+            if (!sgu.GuildPermissions.Administrator && !sgu.GuildPermissions.ManageChannels)
+            {
+                await command.RespondAsync("This command is an admin only command");
+                return;
+            }
+            if (command.CommandName == "listbackup")
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("Currently whitelisted objects:");
+                foreach (string whitelistObject in whitelistObjects)
+                {
+                    sb.AppendLine(whitelistObject);
+                }
+                await command.RespondAsync(sb.ToString());
+                return;
+            }
+            if (command.CommandName == "addbackup")
+            {
+                string val = command.Data.Options.First<SocketSlashCommandDataOption>().Value as string;
+                whitelistObjects.Add(val);
+                SaveWhitelist();
+                backupTask = BackupServer();
+                await command.RespondAsync($"Adding {val} to backups");
+            }
+            if (command.CommandName == "removebackup")
+            {
+                string val = command.Data.Options.First<SocketSlashCommandDataOption>().Value as string;
+                if (!whitelistObjects.Contains(val))
+                {
+                    await command.RespondAsync($"Removing {val} failed, key does not exist");
+                    return;
+                }
+                whitelistObjects.Remove(val);
+                SaveWhitelist();
+                backupTask = BackupServer();
+                await command.RespondAsync($"Removing {val} from backups");
+            }
         }
 
         public async Task BackupServer()
@@ -219,6 +325,10 @@ namespace DarkBotBackup
                     existingChannels.Add(sc.Id);
                 }
             }
+            if (!Directory.Exists(Path.Combine(Environment.CurrentDirectory, "Backup")))
+            {
+                Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, "Backup"));
+            }
             string archiveDirectory = Path.Combine(Environment.CurrentDirectory, "Backup-Removed");
             if (!Directory.Exists(archiveDirectory))
             {
@@ -254,13 +364,13 @@ namespace DarkBotBackup
             }
         }
 
-        private Task ReadyAsync()
+        private async Task ReadyAsync()
         {
             Log(LogSeverity.Info, "Starting backup service");
+            await SetupCommands();
             CleanChannels();
             backupTask = BackupServer();
             DownloadEmbeds();
-            return Task.CompletedTask;
         }
 
         private async Task MessageReceivedAsync(SocketMessage message)
@@ -270,19 +380,6 @@ namespace DarkBotBackup
             if (textChannel == null)
             {
                 return;
-            }
-
-            if (sgu != null && sgu.GuildPermissions.ManageChannels && message.Content.StartsWith(".backup add "))
-            {
-                string key = message.Content.Substring(12);
-                whitelistObjects.Add(key);
-                SaveWhitelist();
-                await textChannel.SendMessageAsync($"Backup is now allowing objects in {key}");
-                if (!backupTask.IsCompleted)
-                {
-                    await backupTask;
-                }
-                backupTask = BackupServer();
             }
 
             //If not on the whitelist bail
